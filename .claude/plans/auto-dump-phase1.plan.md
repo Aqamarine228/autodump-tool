@@ -105,6 +105,7 @@ A panic in any goroutine becomes `Failure("panic", stack)`. The process exits on
 | Key | Default | Note |
 |---|---|---|
 | `DATABASE_SQL_LOGIN/_SQL_PASSWORD/_SQL_HOST/_DATABASE` | required | index DB |
+| `DATABASE_TABLE` | `parsing_documents` | index table; plain identifier only |
 | `DOCUMENTS_SQL_LOGIN/_SQL_PASSWORD/_SQL_HOST/_DATABASE` | required | document tables |
 | `OUTPUT_DIR` | required | writable probe at startup |
 | `SCHEDULE_TIMES` | `02:00` | comma list `HH:mm`, local time |

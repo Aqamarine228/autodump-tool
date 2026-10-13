@@ -79,26 +79,32 @@ type Blocker struct {
 	AgeHours int64
 }
 
-// Index reads the parsing_documents table.
+// Index reads the document index table (parsing_documents by default).
 type Index struct {
-	eng *xorm.Engine // kept alive: xorm closes the pool when the engine is garbage collected
-	db  *sql.DB
+	eng   *xorm.Engine // kept alive: xorm closes the pool when the engine is garbage collected
+	db    *sql.DB
+	query string
 }
 
-// NewIndex returns an Index over eng.
-func NewIndex(eng *xorm.Engine) *Index { return &Index{eng: eng, db: eng.DB().DB} }
+// NewIndex returns an Index over the given table in eng's database.
+// table must be a validated plain identifier.
+func NewIndex(eng *xorm.Engine, table string) *Index {
+	return &Index{eng: eng, db: eng.DB().DB, query: scanQuery(table)}
+}
 
 // scanQuery is one query, so a not-ready row inserted mid-scan can't be skipped.
-const scanQuery = "SELECT id, (total_orders = 0 OR done = 1) AS ok, " +
-	"TIMESTAMPDIFF(HOUR, created_at, NOW()) AS age_h " +
-	"FROM parsing_documents WHERE id >= ? ORDER BY id"
+func scanQuery(table string) string {
+	return "SELECT id, (total_orders = 0 OR done = 1) AS ok, " +
+		"TIMESTAMPDIFF(HOUR, created_at, NOW()) AS age_h " +
+		"FROM " + quoteIdent(table) + " WHERE id >= ? ORDER BY id"
+}
 
 // Scan streams documents with id >= from in id order. It returns the ready
 // ids before the first not-ready document (only if collect) and that
 // document as the blocker, or a nil blocker if every row is ready.
 // A NULL readiness value counts as not ready.
 func (x *Index) Scan(ctx context.Context, from uint64, collect bool) (ids []uint64, blocker *Blocker, err error) {
-	rows, err := x.db.QueryContext(ctx, scanQuery, from)
+	rows, err := x.db.QueryContext(ctx, x.query, from)
 	if err != nil {
 		return nil, nil, err
 	}

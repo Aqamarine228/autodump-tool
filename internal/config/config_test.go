@@ -10,7 +10,7 @@ import (
 )
 
 var allKeys = []string{
-	"DATABASE_SQL_LOGIN", "DATABASE_SQL_PASSWORD", "DATABASE_SQL_HOST", "DATABASE_DATABASE",
+	"DATABASE_SQL_LOGIN", "DATABASE_SQL_PASSWORD", "DATABASE_SQL_HOST", "DATABASE_DATABASE", "DATABASE_TABLE",
 	"DOCUMENTS_SQL_LOGIN", "DOCUMENTS_SQL_PASSWORD", "DOCUMENTS_SQL_HOST", "DOCUMENTS_DATABASE",
 	"OUTPUT_DIR", "SCHEDULE_TIMES", "RUN_ON_START", "START_ID", "BATCH_SIZE", "MERGE_THRESHOLD",
 	"STALL_HOURS", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_RETRY_ATTEMPTS",
@@ -150,5 +150,28 @@ func TestOutputDirUnwritable(t *testing.T) {
 	_, err := Load("")
 	if err == nil || !strings.Contains(err.Error(), "OUTPUT_DIR") {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestIndexTable(t *testing.T) {
+	minimal(t)
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.IndexTable != "parsing_documents" {
+		t.Fatalf("default IndexTable = %q", c.IndexTable)
+	}
+
+	t.Setenv("DATABASE_TABLE", "parsing_documents_v2")
+	if c, err = Load(""); err != nil || c.IndexTable != "parsing_documents_v2" {
+		t.Fatalf("IndexTable = %q, err = %v", c.IndexTable, err)
+	}
+
+	for _, bad := range []string{"docs`; DROP TABLE x", "db.table", "has space", "-x"} {
+		t.Setenv("DATABASE_TABLE", bad)
+		if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "DATABASE_TABLE") {
+			t.Errorf("DATABASE_TABLE=%q: err = %v, want a DATABASE_TABLE error", bad, err)
+		}
 	}
 }

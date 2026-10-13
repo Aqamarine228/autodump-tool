@@ -28,7 +28,7 @@ func TestEngineSurvivesGC(t *testing.T) {
 		t.Fatal(err)
 	}
 	docs := source.NewDocs(eng)
-	idx := source.NewIndex(eng)
+	idx := source.NewIndex(eng, "parsing_documents")
 	eng = nil
 	for i := 0; i < 5; i++ {
 		runtime.GC()

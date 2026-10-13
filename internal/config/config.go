@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 
 	"github.com/joho/godotenv"
@@ -19,6 +20,7 @@ type DBConn struct{ Login, Password, Host, Database string }
 // Config is the validated application configuration.
 type Config struct {
 	Database, Documents DBConn
+	IndexTable          string // document index table in the DATABASE_* database
 	OutputDir           string
 	ScheduleTimes       []schedule.HHMM
 	RunOnStart          bool
@@ -35,6 +37,10 @@ type Config struct {
 
 	Workers, InsertBatchRows, InsertBatchBytes, WriteBufferMB, DBRetryAttempts, DBRetryBaseSec int
 }
+
+// identRe is a plain, unqualified MariaDB table name. Table names can't be
+// bound as query parameters, so only safe names are accepted.
+var identRe = regexp.MustCompile(`^[A-Za-z0-9_$]{1,64}$`)
 
 // loader accumulates problems while reading keys.
 type loader struct{ errs []error }
@@ -117,9 +123,10 @@ func Load(envPath string) (Config, error) {
 	}
 	l := &loader{}
 	c := Config{
-		Database:  l.db("DATABASE", "DATABASE_DATABASE"),
-		Documents: l.db("DOCUMENTS", "DOCUMENTS_DATABASE"),
-		OutputDir: l.required("OUTPUT_DIR"),
+		Database:   l.db("DATABASE", "DATABASE_DATABASE"),
+		Documents:  l.db("DOCUMENTS", "DOCUMENTS_DATABASE"),
+		IndexTable: l.strDef("DATABASE_TABLE", "parsing_documents"),
+		OutputDir:  l.required("OUTPUT_DIR"),
 
 		RunOnStart:     l.boolean("RUN_ON_START"),
 		StartID:        l.uint("START_ID"),
@@ -154,6 +161,9 @@ func Load(envPath string) (Config, error) {
 	}
 	if c.LogTotalMB < c.LogFileMB {
 		l.fail("LOG_TOTAL_MB (%d) must be >= LOG_FILE_MB (%d)", c.LogTotalMB, c.LogFileMB)
+	}
+	if !identRe.MatchString(c.IndexTable) {
+		l.fail("DATABASE_TABLE %q must be a plain table name (letters, digits, _ or $)", c.IndexTable)
 	}
 	if c.OutputDir != "" {
 		if err := checkWritable(c.OutputDir); err != nil {

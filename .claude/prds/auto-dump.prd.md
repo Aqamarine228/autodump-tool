@@ -62,6 +62,7 @@ We'll know we're right when **no document ID below the export position is ever s
 ### Configuration (.env)
 - R15. Everything is set in `.env`:
   - DB connections, reusing the existing `{NAME}_SQL_LOGIN/_SQL_PASSWORD/_SQL_HOST/_DATABASE` convention
+  - index table name (`DATABASE_TABLE`, default `parsing_documents`)
   - output folder
   - run times: one or more `HH:mm`
   - batch size and merge threshold

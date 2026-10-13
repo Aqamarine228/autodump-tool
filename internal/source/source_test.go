@@ -107,3 +107,10 @@ func TestDSNServerTimeZone(t *testing.T) {
 		t.Fatalf("ServerTimeZone DSN must not set time_zone, params=%v", native.Params)
 	}
 }
+
+func TestScanQueryUsesTable(t *testing.T) {
+	q := scanQuery("my_docs")
+	if !strings.Contains(q, "FROM `my_docs` WHERE id >= ?") {
+		t.Fatalf("query = %q", q)
+	}
+}

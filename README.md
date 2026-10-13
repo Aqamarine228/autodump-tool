@@ -23,7 +23,7 @@ The process exits only on a configuration error. Everything else is logged, sent
 
 ## How it works
 
-- **Ready documents.** A document is ready when `parsing_documents.done = 1` or `total_orders = 0`. Documents are exported in ascending ID order. The first document that is not ready stops the run, and nothing after it is exported until it becomes ready.
+- **Ready documents.** The index table is `DATABASE_TABLE` in `DATABASE_DATABASE` (default `parsing_documents`). A document is ready when `done = 1` or `total_orders = 0`. Documents are exported in ascending ID order. The first document that is not ready stops the run, and nothing after it is exported until it becomes ready.
 - **Stall alerts.** If that stuck document is older than `STALL_HOURS` (by `created_at`), a pinned Telegram alert is sent once. When it becomes ready, a "ready now" message follows.
 - **File sizes.** Files hold 100 documents each. When 150 or fewer remain in a run, they all go into one last file. Names are `{first_id}-{last_id}.sql`.
 - **Restoring.** Each file restores with `mysql --default-character-set=utf8mb4 targetdb < file.sql`. It recreates the bare `document_{id}` tables using `DROP TABLE IF EXISTS` + `CREATE TABLE` + multi-row `INSERT`. The restoring server's `max_allowed_packet` must be at least `INSERT_BATCH_BYTES` (default 4 MB).

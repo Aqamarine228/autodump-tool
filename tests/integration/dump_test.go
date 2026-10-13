@@ -275,7 +275,7 @@ func TestRoundTrip(t *testing.T) {
 	buildFixture(t, src)
 	eng := openEngine(t, "autodump_it_src")
 
-	ids, blocker, err := source.NewIndex(eng).Scan(context.Background(), 1, true)
+	ids, blocker, err := source.NewIndex(eng, "parsing_documents").Scan(context.Background(), 1, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestRoundTrip(t *testing.T) {
 func TestIndexScan(t *testing.T) {
 	db := freshDB(t, "autodump_it_idx")
 	mustExec(t, db, parsingDocsDDL)
-	x := source.NewIndex(openEngine(t, "autodump_it_idx"))
+	x := source.NewIndex(openEngine(t, "autodump_it_idx"), "parsing_documents")
 	ctx := context.Background()
 
 	scan := func(from uint64, collect bool) ([]uint64, *source.Blocker) {

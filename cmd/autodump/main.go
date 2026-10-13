@@ -198,7 +198,7 @@ func (a *app) ensureRunner() (*export.Runner, error) {
 		RetryAttempts:  c.DBRetryAttempts,
 		RetryBase:      time.Duration(c.DBRetryBaseSec) * time.Second,
 		Dump:           dump.Options{InsertBatchRows: c.InsertBatchRows, InsertBatchBytes: c.InsertBatchBytes},
-	}, source.NewIndex(idxEng), source.NewDocs(docEng), output.NewDir(c.OutputDir), a.notify, a.log)
+	}, source.NewIndex(idxEng, c.IndexTable), source.NewDocs(docEng), output.NewDir(c.OutputDir), a.notify, a.log)
 	return a.runner, nil
 }
 
