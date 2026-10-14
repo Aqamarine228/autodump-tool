@@ -138,6 +138,20 @@ func (d *Dir) CleanPartials() (int, error) {
 
 var dumpRe = regexp.MustCompile(`^(\d+)-(\d+)\.sql$`)
 
+// ParseFileName returns the ID range of a dump file name like "1-100.sql".
+func ParseFileName(name string) (first, last uint64, ok bool) {
+	m := dumpRe.FindStringSubmatch(name)
+	if m == nil {
+		return 0, 0, false
+	}
+	first, err1 := strconv.ParseUint(m[1], 10, 64)
+	last, err2 := strconv.ParseUint(m[2], 10, 64)
+	if err1 != nil || err2 != nil || first > last {
+		return 0, 0, false
+	}
+	return first, last, true
+}
+
 // Watermark returns the highest exported ID known from dump file names and
 // the state file, or 0 if there is none. A malformed state file is an error.
 func (d *Dir) Watermark() (uint64, error) {
@@ -147,16 +161,9 @@ func (d *Dir) Watermark() (uint64, error) {
 	}
 	var w uint64
 	for _, e := range entries {
-		m := dumpRe.FindStringSubmatch(e.Name())
-		if m == nil || e.IsDir() {
-			continue
+		if _, last, ok := ParseFileName(e.Name()); ok && !e.IsDir() {
+			w = max(w, last)
 		}
-		first, err1 := strconv.ParseUint(m[1], 10, 64)
-		last, err2 := strconv.ParseUint(m[2], 10, 64)
-		if err1 != nil || err2 != nil || first > last {
-			continue
-		}
-		w = max(w, last)
 	}
 	b, err := os.ReadFile(filepath.Join(d.path, StateFile))
 	switch {

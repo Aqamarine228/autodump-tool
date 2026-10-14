@@ -22,6 +22,7 @@ import (
 	"autodump/internal/dump"
 	"autodump/internal/export"
 	"autodump/internal/logx"
+	"autodump/internal/mirror"
 	"autodump/internal/output"
 	"autodump/internal/schedule"
 	"autodump/internal/source"
@@ -75,8 +76,11 @@ type app struct {
 	log    *log.Logger
 	notify *alert.Alerter
 
-	mu      sync.Mutex // guards runner
+	mu      sync.Mutex // guards runner, idx, docs and syncer
 	runner  *export.Runner
+	idx     *source.Index
+	docs    *source.Docs
+	syncer  *mirror.Syncer
 	running sync.Mutex // held while an export runs
 	wg      sync.WaitGroup
 }
@@ -85,8 +89,8 @@ type app struct {
 func (a *app) serve(ctx context.Context) {
 	times := a.cfg.ScheduleTimes
 	next := schedule.Next(time.Now(), times)
-	a.notify.Info(fmt.Sprintf("started: schedule %s, output %s, next run %s",
-		formatTimes(times), a.cfg.OutputDir, next.Format("2006-01-02 15:04")))
+	a.notify.Info(fmt.Sprintf("started: schedule %s, output %s, %s, next run %s",
+		formatTimes(times), a.cfg.OutputDir, a.mirrorText(), next.Format("2006-01-02 15:04")))
 
 	if a.cfg.RunOnStart {
 		a.trigger(ctx)
@@ -133,6 +137,9 @@ func (a *app) trigger(ctx context.Context) {
 		defer a.wg.Done()
 		defer a.running.Unlock()
 		a.guard("export", func() error { return a.export(ctx, 0) })
+		if a.cfg.MirrorEnabled && ctx.Err() == nil {
+			a.guard("mirror sync", func() error { return a.syncMirror(ctx) })
+		}
 	}()
 }
 
@@ -144,6 +151,13 @@ func (a *app) runNow(ctx context.Context, limit int) int {
 		failed = err != nil
 		return err
 	})
+	if limit == 0 && a.cfg.MirrorEnabled && ctx.Err() == nil {
+		a.guard("mirror sync", func() error {
+			err := a.syncMirror(ctx)
+			failed = failed || err != nil
+			return err
+		})
+	}
 	if failed {
 		return 1
 	}
@@ -169,6 +183,57 @@ func (a *app) export(ctx context.Context, limit int) error {
 	return err
 }
 
+func (a *app) syncMirror(ctx context.Context) error {
+	s, err := a.ensureMirror()
+	if err != nil {
+		return err
+	}
+	sum, err := s.Run(ctx)
+	a.log.Printf("mirror sync finished: cutoff %s, %d kept, %d added (%d rows), %d dropped, %d file(s) copied, %d deleted in %s",
+		sum.Cutoff, sum.Kept, sum.Added, sum.Rows, sum.Dropped, sum.FilesCopied, sum.FilesDeleted, sum.Duration.Round(time.Second))
+	return err
+}
+
+// ensureMirror connects to the third server once; on failure the next run retries.
+func (a *app) ensureMirror() (*mirror.Syncer, error) {
+	if _, err := a.ensureRunner(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.syncer != nil {
+		return a.syncer, nil
+	}
+	eng, err := source.Open(conn(a.cfg.Mirror))
+	if err != nil {
+		return nil, &connectError{"mirror (MIRROR_*)", err}
+	}
+	c := a.cfg
+	store := output.NewDir(c.OutputDir)
+	a.syncer = mirror.New(mirror.Config{
+		StartID:       c.StartID,
+		RetentionDays: c.RetentionDays,
+		FilesDir:      c.MirrorFilesDir,
+		OutputDir:     c.OutputDir,
+		Workers:       c.Workers,
+		RetryAttempts: c.DBRetryAttempts,
+		RetryBase:     time.Duration(c.DBRetryBaseSec) * time.Second,
+		Dump:          dump.Options{InsertBatchRows: c.InsertBatchRows, InsertBatchBytes: c.InsertBatchBytes},
+	}, a.idx, a.docs, mirror.NewDBTarget(eng), store.Watermark, a.log)
+	return a.syncer, nil
+}
+
+func (a *app) mirrorText() string {
+	if !a.cfg.MirrorEnabled {
+		return "mirror off"
+	}
+	files := "tables only"
+	if a.cfg.MirrorFilesDir != "" {
+		files = "files " + a.cfg.MirrorFilesDir
+	}
+	return fmt.Sprintf("mirror %s/%s (%s, %d days)", a.cfg.Mirror.Host, a.cfg.Mirror.Database, files, a.cfg.RetentionDays)
+}
+
 // ensureRunner connects to both databases once; on failure the next run retries.
 func (a *app) ensureRunner() (*export.Runner, error) {
 	a.mu.Lock()
@@ -188,6 +253,7 @@ func (a *app) ensureRunner() (*export.Runner, error) {
 		return nil, &connectError{"documents (DOCUMENTS_*)", err}
 	}
 	c := a.cfg
+	a.idx, a.docs = source.NewIndex(idxEng, c.IndexTable), source.NewDocs(docEng)
 	a.runner = export.New(export.Config{
 		StartID:        c.StartID,
 		BatchSize:      c.BatchSize,
@@ -198,7 +264,7 @@ func (a *app) ensureRunner() (*export.Runner, error) {
 		RetryAttempts:  c.DBRetryAttempts,
 		RetryBase:      time.Duration(c.DBRetryBaseSec) * time.Second,
 		Dump:           dump.Options{InsertBatchRows: c.InsertBatchRows, InsertBatchBytes: c.InsertBatchBytes},
-	}, source.NewIndex(idxEng, c.IndexTable), source.NewDocs(docEng), output.NewDir(c.OutputDir), a.notify, a.log)
+	}, a.idx, a.docs, output.NewDir(c.OutputDir), a.notify, a.log)
 	return a.runner, nil
 }
 
@@ -214,15 +280,18 @@ func (a *app) guard(what string, fn func() error) {
 		return
 	}
 	key := export.AlertKey(err)
+	if what == "mirror sync" {
+		key = "mirror_" + key // reported separately from the export's errors
+	}
 	var ce *connectError
 	if errors.As(err, &ce) {
-		key = "db_connect"
+		key = "db_connect " + ce.which // a source outage is reported once, not by both steps
 	}
 	a.notify.Failure(key, fmt.Sprintf("%s failed: %s", what, a.redact(err.Error())))
 }
 
 func (a *app) redact(s string) string {
-	return logx.Redact(s, a.cfg.Database.Password, a.cfg.Documents.Password, a.cfg.TelegramToken)
+	return logx.Redact(s, a.cfg.Database.Password, a.cfg.Documents.Password, a.cfg.Mirror.Password, a.cfg.TelegramToken)
 }
 
 type connectError struct {

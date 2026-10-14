@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 
@@ -36,6 +37,12 @@ type Config struct {
 	LogFileMB, LogTotalMB int
 
 	Workers, InsertBatchRows, InsertBatchBytes, WriteBufferMB, DBRetryAttempts, DBRetryBaseSec int
+
+	// Phase 2: the third server keeps only the last RetentionDays of documents.
+	MirrorEnabled  bool
+	Mirror         DBConn // dedicated database; autodump drops document_* tables in it
+	MirrorFilesDir string // optional share for the .sql files; "" = tables only
+	RetentionDays  int
 }
 
 // identRe is a plain, unqualified MariaDB table name. Table names can't be
@@ -171,10 +178,56 @@ func Load(envPath string) (Config, error) {
 		}
 	}
 
+	c.MirrorEnabled = l.boolean("MIRROR_ENABLED")
+	if c.MirrorEnabled {
+		c.Mirror = l.db("MIRROR", "MIRROR_DATABASE")
+		c.MirrorFilesDir = l.str("MIRROR_FILES_DIR")
+		c.RetentionDays = l.int("RETENTION_DAYS", 30, false)
+		for _, src := range []struct {
+			key string
+			db  DBConn
+		}{{"DATABASE_*", c.Database}, {"DOCUMENTS_*", c.Documents}} {
+			if sameDB(c.Mirror, src.db) {
+				l.fail("MIRROR_* must point to a dedicated database, not the same one as %s (autodump drops tables there)", src.key)
+			}
+		}
+		if c.MirrorFilesDir != "" {
+			if samePath(c.MirrorFilesDir, c.OutputDir) {
+				l.fail("MIRROR_FILES_DIR must differ from OUTPUT_DIR (old files are deleted there)")
+			} else if err := checkWritable(c.MirrorFilesDir); err != nil {
+				l.fail("MIRROR_FILES_DIR %q is not usable: %v", c.MirrorFilesDir, err)
+			}
+		}
+	}
+
 	if len(l.errs) > 0 {
 		return Config{}, errors.Join(l.errs...)
 	}
 	return c, nil
+}
+
+// sameDB reports whether a and b name the same database on the same server.
+func sameDB(a, b DBConn) bool {
+	return a.Database != "" && strings.EqualFold(a.Database, b.Database) && hostKey(a.Host) == hostKey(b.Host)
+}
+
+func hostKey(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if !strings.Contains(h, ":") {
+		h += ":3306"
+	}
+	host, port, _ := strings.Cut(h, ":")
+	if host == "localhost" || host == "" {
+		host = "127.0.0.1"
+	}
+	return host + ":" + port
+}
+
+// samePath compares paths case-insensitively (Windows).
+func samePath(a, b string) bool {
+	x, err1 := filepath.Abs(a)
+	y, err2 := filepath.Abs(b)
+	return err1 == nil && err2 == nil && strings.EqualFold(filepath.Clean(x), filepath.Clean(y))
 }
 
 // checkWritable creates dir if needed and proves it is writable with a probe file.

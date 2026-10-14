@@ -14,7 +14,7 @@ The prctrl platform stores each parsing document as its own MariaDB table (`data
 
 ## Users
 - **Primary**: the prctrl platform operator (the requester). They need every finished document archived without manual work, and need to hear about it in Telegram when the archive stalls or fails.
-- **Not for**: end users of prctrl dashboards; consumers of a live 30-day mirror (Phase 2, deferred).
+- **Not for**: end users of prctrl dashboards; consumers of the 30-day mirror itself (it is only filled and expired by this tool).
 
 ## Hypothesis
 We believe a **scheduled, sequential document exporter** will **archive every finished document into restorable SQL files with no manual work** for the **prctrl platform operator**.
@@ -95,7 +95,6 @@ We'll know we're right when **no document ID below the export position is ever s
 **MVP**: R1–R22. Sequential export of all exportable documents into SQL files of 100 tables (max 150), named by ID range, Telegram stall and failure alerts, `.env` config, size-capped txt log, a Windows `.exe` that is tested locally.
 
 **Out of scope**
-- Phase 2: copy to a third server with 30-day retention. Deferred; the requester called it "room for extension". Notes are kept below.
 - Deleting local files, or any date-based retention, in Phase 1. Phase 1 exports everything.
 - Database state or log tables. The requester ruled these out.
 - Writing to or deleting from source databases.
@@ -109,12 +108,17 @@ We'll know we're right when **no document ID below the export position is ever s
 | 1 | Sequential export | `.exe` exports ready documents in ID order into correctly sized, correctly named, restorable files; resumes after restart | complete | .claude/plans/auto-dump-phase1.plan.md |
 | 2 | Telegram alerting | Stalls past `STALL_HOURS` and failures reach the group; stall messages are pinned | complete | .claude/plans/auto-dump-phase1.plan.md |
 | 3 | Throughput at scale | Benchmarked on production-like data; meets the agreed GB/h target; backlog has a completion date | in-progress | .claude/plans/auto-dump-phase1.plan.md |
-| 4 | Phase 2: 30-day mirror (deferred) | Third server holds the last 30 days; older documents and their files are removed | pending | — |
+| 4 | Phase 2: 30-day mirror | Third server holds the last 30 days; older documents and their files are removed | complete | this PRD, section Phase 2 |
 
-## Phase 2 notes (deferred, not requirements yet)
-- Copy recent documents to a third server. Each run removes documents older than 30 days (rolling from run time, by `parsing_documents.created_at`) and adds new ones.
-- Delete a file only when every document in it is older than 30 days. A file containing any document younger than 30 days stays.
-- Open: does the third server hold restored tables, files, or both?
+## Phase 2 requirements (decided 2026-10-13)
+- P1. The third server holds restored `document_{id}` tables in a dedicated MariaDB database AND copies of the batch `.sql` files in a folder (network share). Files are optional (`MIRROR_FILES_DIR` empty = tables only).
+- P2. Window: rolling `RETENTION_DAYS` (default 30) × 24 h back from the run, by `parsing_documents.created_at`, on the index server's clock. "The 12th of last month" was an example.
+- P3. Access: direct MariaDB connection (`MIRROR_SQL_LOGIN/_PASSWORD/_HOST`, `MIRROR_DATABASE`), and the files via a mounted or UNC path.
+- P4. Each scheduled run first exports, then syncs the mirror. It adds exported documents in the window that are missing, and drops document tables the index proves are older than the window.
+- P5. A file is deleted from the share only when every document in it is older than the window.
+- P6. Unknown age (not in the index, or NULL `created_at`) never authorizes deletion. Non-document tables are never touched.
+- P7. Safety: the mirror database must not be the index or documents database, and the files folder must not be `OUTPUT_DIR`.
+- P8. A mirror failure is alerted to Telegram with its own key and does not block the export.
 
 ## Decisions (closed 2026-10-13)
 - OQ1 Empty documents (`total_orders = 0`) are never filled later. Exported as is.

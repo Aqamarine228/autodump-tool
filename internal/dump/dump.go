@@ -16,16 +16,24 @@ type Options struct {
 	InsertBatchBytes int
 }
 
-const fileHeader = "-- autodump\n" +
-	"/*!40101 SET NAMES utf8mb4 */;\n" +
-	"SET time_zone='+00:00';\n" +
-	"SET FOREIGN_KEY_CHECKS=0;\n" +
-	"SET UNIQUE_CHECKS=0;\n" +
-	"SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n"
+// SessionSQL are the session settings a dump file starts with. Importers that
+// execute statements directly must run them on the same connection first.
+var SessionSQL = []string{
+	"/*!40101 SET NAMES utf8mb4 */",
+	"SET time_zone='+00:00'",
+	"SET FOREIGN_KEY_CHECKS=0",
+	"SET UNIQUE_CHECKS=0",
+	"SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO'",
+}
 
 // WriteFileHeader writes the session settings every dump file starts with.
 func WriteFileHeader(w io.Writer) error {
-	_, err := io.WriteString(w, fileHeader)
+	b := []byte("-- autodump\n")
+	for _, s := range SessionSQL {
+		b = append(b, s...)
+		b = append(b, ";\n"...)
+	}
+	_, err := w.Write(b)
 	return err
 }
 
@@ -42,6 +50,9 @@ func WriteFileFooter(w io.Writer, tables int, rows int64) error {
 
 // WriteTable writes DROP, the DDL and the table's rows as batched INSERTs.
 // stream must call its RowFunc once per row and return its errors.
+//
+// Statements end with ";\n" exactly at the end of a Write call and nowhere
+// else at a Write boundary, so a writer can execute them one by one.
 func WriteTable(w io.Writer, table, ddl string, stream func(source.RowFunc) error, opts Options) (int64, error) {
 	tw := newTableWriter(w, table, opts)
 	if err := tw.begin(ddl); err != nil {
@@ -85,9 +96,10 @@ func newTableWriter(w io.Writer, table string, opts Options) *tableWriter {
 func (t *tableWriter) begin(ddl string) error {
 	b := appendIdent([]byte("DROP TABLE IF EXISTS "), t.table)
 	b = append(b, ";\n"...)
-	b = append(b, ddl...)
-	b = append(b, ";\n"...)
-	_, err := t.w.Write(b)
+	if _, err := t.w.Write(b); err != nil {
+		return err
+	}
+	_, err := t.w.Write(append([]byte(ddl), ";\n"...))
 	return err
 }
 

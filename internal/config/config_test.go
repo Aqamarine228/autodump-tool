@@ -16,6 +16,8 @@ var allKeys = []string{
 	"STALL_HOURS", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_RETRY_ATTEMPTS",
 	"LOG_FILE", "LOG_FILE_MB", "LOG_TOTAL_MB", "WORKERS", "INSERT_BATCH_ROWS",
 	"INSERT_BATCH_BYTES", "WRITE_BUFFER_MB", "DB_RETRY_ATTEMPTS", "DB_RETRY_BASE_SEC",
+	"MIRROR_ENABLED", "MIRROR_SQL_LOGIN", "MIRROR_SQL_PASSWORD", "MIRROR_SQL_HOST", "MIRROR_DATABASE",
+	"MIRROR_FILES_DIR", "RETENTION_DAYS",
 }
 
 // clean blanks every known key for the test (restored automatically).
@@ -173,5 +175,65 @@ func TestIndexTable(t *testing.T) {
 		if _, err := Load(""); err == nil || !strings.Contains(err.Error(), "DATABASE_TABLE") {
 			t.Errorf("DATABASE_TABLE=%q: err = %v, want a DATABASE_TABLE error", bad, err)
 		}
+	}
+}
+
+func TestMirrorOffByDefault(t *testing.T) {
+	minimal(t)
+	t.Setenv("MIRROR_SQL_HOST", "h1:3306") // ignored while disabled
+	c, err := Load("")
+	if err != nil || c.MirrorEnabled || c.Mirror.Host != "" {
+		t.Fatalf("%v %+v", err, c)
+	}
+}
+
+func TestMirror(t *testing.T) {
+	minimal(t)
+	share := filepath.Join(t.TempDir(), "share")
+	t.Setenv("MIRROR_ENABLED", "true")
+	t.Setenv("MIRROR_SQL_LOGIN", "u3")
+	t.Setenv("MIRROR_SQL_HOST", "mirror:3306")
+	t.Setenv("MIRROR_DATABASE", "d1") // same name as the index db but another server: fine
+	t.Setenv("MIRROR_FILES_DIR", share)
+	c, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.MirrorEnabled || c.Mirror.Login != "u3" || c.MirrorFilesDir != share || c.RetentionDays != 30 {
+		t.Fatalf("%+v", c)
+	}
+	if _, err := os.Stat(share); err != nil {
+		t.Fatal("files dir must be created")
+	}
+}
+
+func TestMirrorRequiredKeys(t *testing.T) {
+	minimal(t)
+	t.Setenv("MIRROR_ENABLED", "true")
+	t.Setenv("RETENTION_DAYS", "0")
+	_, err := Load("")
+	for _, k := range []string{"MIRROR_SQL_LOGIN", "MIRROR_SQL_HOST", "MIRROR_DATABASE", "RETENTION_DAYS"} {
+		if err == nil || !strings.Contains(err.Error(), k) {
+			t.Errorf("missing %s in: %v", k, err)
+		}
+	}
+}
+
+func TestMirrorMustNotBeASource(t *testing.T) {
+	out := minimal(t)
+	t.Setenv("MIRROR_ENABLED", "true")
+	t.Setenv("MIRROR_SQL_LOGIN", "u3")
+	t.Setenv("MIRROR_SQL_HOST", "H2") // documents db is h2:3306
+	t.Setenv("MIRROR_DATABASE", "D2")
+	t.Setenv("MIRROR_FILES_DIR", out+string(filepath.Separator))
+	_, err := Load("")
+	if err == nil || !strings.Contains(err.Error(), "DOCUMENTS_*") || !strings.Contains(err.Error(), "MIRROR_FILES_DIR") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestHostKey(t *testing.T) {
+	if hostKey("localhost") != hostKey("127.0.0.1:3306") || hostKey("a:3307") == hostKey("a") {
+		t.Fatal("hostKey")
 	}
 }
